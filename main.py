@@ -18,7 +18,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model = SentenceTransformer(config.EMBEDDING_MODEL)
+# Lazy load model to reduce startup memory
+_model = None
+def get_model():
+    global _model
+    if _model is None:
+        _model = SentenceTransformer(config.EMBEDDING_MODEL)
+    return _model
+
 supabase = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
 groq_client = Groq(api_key=config.GROQ_API_KEY)
 
@@ -173,6 +180,7 @@ def generate_summary(query, employees):
 @app.post("/api/search")
 async def search(request: SearchRequest):
     filters = extract_filters(request.query)
+    model = get_model()
     query_embedding = model.encode(request.query).tolist()
     employees = search_employees(query_embedding, filters)
     summary = generate_summary(request.query, employees)
