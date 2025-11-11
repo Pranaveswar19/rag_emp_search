@@ -7,6 +7,14 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# Validate required environment variables
+if not SUPABASE_URL:
+    raise ValueError("SUPABASE_URL environment variable is required")
+if not SUPABASE_KEY:
+    raise ValueError("SUPABASE_KEY environment variable is required")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY environment variable is required")
+
 # Use smallest model to reduce memory usage on free tier
 EMBEDDING_MODEL = "paraphrase-MiniLM-L3-v2"  # 61MB vs 80MB for all-MiniLM-L6-v2
 LLM_MODEL = "llama-3.1-8b-instant"

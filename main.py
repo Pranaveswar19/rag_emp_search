@@ -26,14 +26,28 @@ def get_model():
         _model = SentenceTransformer(config.EMBEDDING_MODEL)
     return _model
 
-supabase = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
-groq_client = Groq(api_key=config.GROQ_API_KEY)
+# Lazy load clients to reduce startup memory
+_supabase = None
+_groq_client = None
+
+def get_supabase():
+    global _supabase
+    if _supabase is None:
+        _supabase = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+    return _supabase
+
+def get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        _groq_client = Groq(api_key=config.GROQ_API_KEY)
+    return _groq_client
 
 class SearchRequest(BaseModel):
     query: str
 
 def extract_filters(query):
     try:
+        groq_client = get_groq_client()
         response = groq_client.chat.completions.create(
             messages=[
                 {
@@ -108,6 +122,7 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
         return {}
 
 def search_employees(query_embedding, filters, limit=20):
+    supabase = get_supabase()
     query_builder = supabase.table("employees").select("*, employee_embeddings(embedding)")
     
     # Apply hard filters for date, department, and experience
@@ -143,7 +158,10 @@ def search_employees(query_embedding, filters, limit=20):
                 continue
             
             if isinstance(emb_data, str):
-                emp_embedding = eval(emb_data)
+                try:
+                    emp_embedding = json.loads(emb_data)
+                except json.JSONDecodeError:
+                    continue
             elif isinstance(emb_data, list):
                 emp_embedding = emb_data
         
@@ -164,6 +182,7 @@ def generate_summary(query, employees):
     ])
     
     try:
+        groq_client = get_groq_client()
         response = groq_client.chat.completions.create(
             messages=[
                 {"role": "system", "content": "Summarize employee search results in 1-2 sentences."},
