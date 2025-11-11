@@ -3,13 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
 from supabase import create_client
 from groq import Groq
 import config
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+import numpy as np
 
 app = FastAPI()
 
@@ -23,14 +23,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Lazy load model to reduce startup memory
-_model = None
-def get_model():
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(config.EMBEDDING_MODEL)
-    return _model
 
 # Lazy load clients to reduce startup memory
 _supabase = None
@@ -47,6 +39,21 @@ def get_groq_client():
     if _groq_client is None:
         _groq_client = Groq(api_key=config.GROQ_API_KEY)
     return _groq_client
+
+# Simple keyword-based embedding (lightweight alternative)
+def create_simple_embedding(text, dimension=384):
+    """Create a simple embedding based on keywords - no ML model needed"""
+    words = text.lower().split()
+    # Simple hash-based embedding
+    embedding = np.zeros(dimension)
+    for i, word in enumerate(words):
+        hash_val = hash(word) % dimension
+        embedding[hash_val] += 1.0 / (i + 1)  # Position-weighted
+    # Normalize
+    norm = np.linalg.norm(embedding)
+    if norm > 0:
+        embedding = embedding / norm
+    return embedding.tolist()
 
 class SearchRequest(BaseModel):
     query: str
@@ -205,8 +212,8 @@ def generate_summary(query, employees):
 @app.post("/api/search")
 async def search(request: SearchRequest):
     filters = extract_filters(request.query)
-    model = get_model()
-    query_embedding = model.encode(request.query).tolist()
+    # Use simple embedding instead of ML model
+    query_embedding = create_simple_embedding(request.query)
     employees = search_employees(query_embedding, filters)
     summary = generate_summary(request.query, employees)
     
