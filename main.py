@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from supabase import create_client
@@ -7,8 +9,12 @@ from groq import Groq
 import config
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 app = FastAPI()
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -228,7 +234,7 @@ async def search(request: SearchRequest):
 
 @app.get("/")
 async def root():
-    return {"status": "running", "service": "Employee RAG Search API"}
+    return FileResponse("static/index.html")
 
 @app.get("/health")
 async def health():
