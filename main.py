@@ -70,11 +70,15 @@ def extract_filters(query):
 
 Available fields:
 - skills: array of specific programming languages, frameworks, or technologies (e.g., Python, React, AWS, Docker)
-- join_date_after: date string in YYYY-MM-DD format
+- join_date: exact date string in YYYY-MM-DD format (use this when query says "joined on" or "hired on" specific date)
+- join_date_after: date string in YYYY-MM-DD format (use this when query says "joined after" or "since")
 - department: string (Engineering, Data, Design, Product, Marketing, Sales, HR, Finance, Security, QA, Operations, Legal, Business Development, Customer Success)
 - min_experience: integer representing years
 
-IMPORTANT: "skills" should contain ONLY technology names. Ignore words like: developers, engineers, Backend, Frontend, Full-stack, Senior, Junior, people, staff.
+IMPORTANT: 
+- "skills" should contain ONLY technology names. Ignore words like: developers, engineers, Backend, Frontend, Full-stack, Senior, Junior, people, staff.
+- If query says "joined on [date]" use "join_date", NOT "join_date_after"
+- If query says "joined after [date]" or "since [date]" use "join_date_after"
 
 Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."""
                 },
@@ -101,6 +105,14 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
                 {
                     "role": "assistant",
                     "content": '{"skills": ["React"], "min_experience": 5}'
+                },
+                {
+                    "role": "user",
+                    "content": "Employees who joined on 2023-09-15"
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"join_date": "2023-09-15"}'
                 },
                 {"role": "user", "content": query}
             ],
@@ -140,7 +152,11 @@ def search_employees(query_embedding, filters, limit=50):
     query_builder = supabase.table("employees").select("*, employee_embeddings(embedding)")
     
     # Apply hard filters for date, department, and experience
-    if "join_date_after" in filters:
+    if "join_date" in filters:
+        # Exact date match
+        query_builder = query_builder.eq("join_date", filters["join_date"])
+    elif "join_date_after" in filters:
+        # Date range (after)
         query_builder = query_builder.gte("join_date", filters["join_date_after"])
     
     if "department" in filters:
