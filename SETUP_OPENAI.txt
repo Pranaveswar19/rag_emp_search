@@ -1,0 +1,61 @@
+SETUP INSTRUCTIONS - OpenAI Embeddings
+
+========================================
+STEP 1: Get OpenAI API Key
+========================================
+1. Go to https://platform.openai.com/api-keys
+2. Sign up / Log in (requires credit card)
+3. Click "Create new secret key"
+4. Copy the key (starts with sk-)
+
+Initial credit: $5 free for new accounts
+Cost: ~$0.10 per 1,000 searches
+
+
+========================================
+STEP 2: Update Supabase Database
+========================================
+1. Go to Supabase → SQL Editor
+2. Run migration_to_openai.sql
+3. This changes embedding dimension from 384 → 1536
+
+⚠️ WARNING: This DELETES existing embeddings!
+
+
+========================================
+STEP 3: Add OpenAI Key to Railway
+========================================
+1. Go to Railway dashboard
+2. Click your project → Variables
+3. Add: OPENAI_API_KEY = sk-your-key-here
+4. Save (will auto-redeploy)
+
+
+========================================
+STEP 4: Re-embed Employees
+========================================
+Use the admin API to add employees with new embeddings:
+
+POST https://your-railway-url/api/admin/add_employee
+
+Or call the webhook to re-embed existing ones:
+
+POST https://your-railway-url/api/admin/webhook/re-embed
+{"employee_id": 1, "action": "UPDATE"}
+
+
+========================================
+WHAT YOU GET
+========================================
+✅ High-quality semantic search
+✅ Fast 1-2 minute builds on Railway
+✅ No memory issues
+✅ ~$0.10/month for 1,000 searches
+✅ Groq LLM still FREE (best of both worlds)
+
+
+========================================
+COST MONITORING
+========================================
+Check usage at: https://platform.openai.com/usage
+Set spending limits in OpenAI dashboard

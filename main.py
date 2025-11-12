@@ -5,11 +5,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from supabase import create_client
 from groq import Groq
+from openai import OpenAI
 import config
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-import numpy as np
 
 app = FastAPI()
 
@@ -24,9 +24,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Lazy load clients to reduce startup memory
+# Lazy load clients
 _supabase = None
 _groq_client = None
+_openai_client = None
 
 def get_supabase():
     global _supabase
@@ -40,17 +41,20 @@ def get_groq_client():
         _groq_client = Groq(api_key=config.GROQ_API_KEY)
     return _groq_client
 
-def create_simple_embedding(text, dimension=384):
-    """Lightweight hash-based embedding - works on free tier"""
-    words = text.lower().split()
-    embedding = np.zeros(dimension)
-    for i, word in enumerate(words):
-        hash_val = hash(word) % dimension
-        embedding[hash_val] += 1.0 / (i + 1)
-    norm = np.linalg.norm(embedding)
-    if norm > 0:
-        embedding = embedding / norm
-    return embedding.tolist()
+def get_openai_client():
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+    return _openai_client
+
+def create_openai_embedding(text):
+    """Create high-quality embedding using OpenAI API"""
+    client = get_openai_client()
+    response = client.embeddings.create(
+        model=config.OPENAI_EMBEDDING_MODEL,
+        input=text
+    )
+    return response.data[0].embedding
 
 class SearchRequest(BaseModel):
     query: str
@@ -209,7 +213,8 @@ def generate_summary(query, employees):
 @app.post("/api/search")
 async def search(request: SearchRequest):
     filters = extract_filters(request.query)
-    query_embedding = create_simple_embedding(request.query)
+    # Use OpenAI for high-quality embeddings
+    query_embedding = create_openai_embedding(request.query)
     employees = search_employees(query_embedding, filters)
     summary = generate_summary(request.query, employees)
     
@@ -253,7 +258,7 @@ class EmployeeCreate(BaseModel):
     email: str
 
 def create_employee_embedding(employee_data):
-    """Helper function to create embedding from employee data"""
+    """Helper function to create high-quality OpenAI embedding"""
     text = f"""
     Name: {employee_data['name']}
     Skills: {', '.join(employee_data['skills'])}
@@ -262,7 +267,7 @@ def create_employee_embedding(employee_data):
     Bio: {employee_data['bio']}
     Joined: {employee_data['join_date']}
     """
-    return create_simple_embedding(text)
+    return create_openai_embedding(text)
 
 @app.post("/api/admin/add_employee")
 async def add_employee(employee: EmployeeCreate):
