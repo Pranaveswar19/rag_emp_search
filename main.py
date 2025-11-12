@@ -152,12 +152,8 @@ def search_employees(query_embedding, filters, limit=20):
     result = query_builder.execute()
     employees_with_embeddings = result.data
     
-    # Apply soft skill filter: if skills specified, employee must have at least one matching skill
-    if "skills" in filters and filters["skills"]:
-        employees_with_embeddings = [
-            emp for emp in employees_with_embeddings
-            if any(skill.lower() in [s.lower() for s in emp.get("skills", [])] for skill in filters["skills"])
-        ]
+    # Removed strict skill filter - let semantic search handle it!
+    # OpenAI embeddings will naturally rank relevant people higher
     
     scored_employees = []
     for emp in employees_with_embeddings:
@@ -181,6 +177,12 @@ def search_employees(query_embedding, filters, limit=20):
         
         if emp_embedding and isinstance(emp_embedding, list):
             similarity = sum(float(a) * float(b) for a, b in zip(query_embedding, emp_embedding))
+            
+            # Boost score if exact skill match exists (hybrid approach)
+            if "skills" in filters and filters["skills"]:
+                if any(skill.lower() in [s.lower() for s in emp.get("skills", [])] for skill in filters["skills"]):
+                    similarity *= 1.2  # 20% boost for exact matches
+            
             scored_employees.append((similarity, emp))
     
     scored_employees.sort(reverse=True, key=lambda x: x[0])
