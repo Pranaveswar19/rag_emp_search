@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from supabase import create_client
 from groq import Groq
+from sentence_transformers import SentenceTransformer
 import config
 import json
 from datetime import datetime, timedelta
@@ -27,6 +28,7 @@ app.add_middleware(
 # Lazy load clients to reduce startup memory
 _supabase = None
 _groq_client = None
+_model = None
 
 def get_supabase():
     global _supabase
@@ -40,7 +42,14 @@ def get_groq_client():
         _groq_client = Groq(api_key=config.GROQ_API_KEY)
     return _groq_client
 
-# Simple keyword-based embedding (lightweight alternative)
+def get_model():
+    """Lazy load sentence transformer model for high-quality embeddings"""
+    global _model
+    if _model is None:
+        _model = SentenceTransformer(config.EMBEDDING_MODEL)
+    return _model
+
+# Keep simple embedding as fallback
 def create_simple_embedding(text, dimension=384):
     """Create a simple embedding based on keywords - no ML model needed"""
     words = text.lower().split()
@@ -212,8 +221,9 @@ def generate_summary(query, employees):
 @app.post("/api/search")
 async def search(request: SearchRequest):
     filters = extract_filters(request.query)
-    # Use simple embedding instead of ML model
-    query_embedding = create_simple_embedding(request.query)
+    # Use high-quality ML model for embeddings
+    model = get_model()
+    query_embedding = model.encode(request.query).tolist()
     employees = search_employees(query_embedding, filters)
     summary = generate_summary(request.query, employees)
     
@@ -246,6 +256,165 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+class EmployeeCreate(BaseModel):
+    name: str
+    skills: list[str]
+    department: str
+    join_date: str
+    experience_years: int
+    bio: str
+    email: str
+
+def create_employee_embedding(employee_data):
+    """Helper function to create HIGH QUALITY embedding from employee data"""
+    text = f"""
+    Name: {employee_data['name']}
+    Skills: {', '.join(employee_data['skills'])}
+    Department: {employee_data['department']}
+    Experience: {employee_data['experience_years']} years
+    Bio: {employee_data['bio']}
+    Joined: {employee_data['join_date']}
+    """
+    model = get_model()
+    return model.encode(text).tolist()
+
+@app.post("/api/admin/add_employee")
+async def add_employee(employee: EmployeeCreate):
+    """Add a new employee with automatic embedding generation"""
+    try:
+        supabase = get_supabase()
+        
+        # Get next available ID
+        result = supabase.table("employees").select("id").order("id", desc=True).limit(1).execute()
+        next_id = (result.data[0]["id"] + 1) if result.data else 1
+        
+        # Insert employee
+        emp_data = {
+            "id": next_id,
+            "name": employee.name,
+            "skills": employee.skills,
+            "department": employee.department,
+            "join_date": employee.join_date,
+            "experience_years": employee.experience_years,
+            "bio": employee.bio,
+            "email": employee.email
+        }
+        supabase.table("employees").insert(emp_data).execute()
+        
+        # Create and insert embedding
+        embedding = create_employee_embedding(emp_data)
+        supabase.table("employee_embeddings").insert({
+            "id": next_id,
+            "embedding": embedding
+        }).execute()
+        
+        return {
+            "success": True,
+            "message": f"Employee {employee.name} added successfully",
+            "id": next_id
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.put("/api/admin/update_employee/{employee_id}")
+async def update_employee(employee_id: int, employee: EmployeeCreate):
+    """Update employee and automatically re-create embedding"""
+    try:
+        supabase = get_supabase()
+        
+        # Update employee data
+        emp_data = {
+            "name": employee.name,
+            "skills": employee.skills,
+            "department": employee.department,
+            "join_date": employee.join_date,
+            "experience_years": employee.experience_years,
+            "bio": employee.bio,
+            "email": employee.email
+        }
+        supabase.table("employees").update(emp_data).eq("id", employee_id).execute()
+        
+        # Re-create embedding
+        emp_data["id"] = employee_id
+        embedding = create_employee_embedding(emp_data)
+        supabase.table("employee_embeddings").update({
+            "embedding": embedding
+        }).eq("id", employee_id).execute()
+        
+        return {
+            "success": True,
+            "message": f"Employee {employee.name} updated successfully"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.delete("/api/admin/delete_employee/{employee_id}")
+async def delete_employee(employee_id: int):
+    """Delete employee and their embedding"""
+    try:
+        supabase = get_supabase()
+        
+        # Delete embedding first (foreign key constraint)
+        supabase.table("employee_embeddings").delete().eq("id", employee_id).execute()
+        
+        # Delete employee
+        supabase.table("employees").delete().eq("id", employee_id).execute()
+        
+        return {
+            "success": True,
+            "message": f"Employee {employee_id} deleted successfully"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+class WebhookPayload(BaseModel):
+    employee_id: int
+    action: str
+
+@app.post("/api/admin/webhook/re-embed")
+async def webhook_re_embed(payload: WebhookPayload):
+    """
+    Webhook endpoint called by Supabase trigger when employee data changes.
+    Automatically re-creates embeddings when HR updates Supabase directly.
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Get employee data
+        result = supabase.table("employees").select("*").eq("id", payload.employee_id).execute()
+        if not result.data:
+            return {"success": False, "error": "Employee not found"}
+        
+        employee = result.data[0]
+        
+        # Create new embedding
+        embedding = create_employee_embedding(employee)
+        
+        # Update or insert embedding
+        supabase.table("employee_embeddings").upsert({
+            "id": payload.employee_id,
+            "embedding": embedding
+        }).execute()
+        
+        return {
+            "success": True,
+            "message": f"Re-embedded employee {payload.employee_id}"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 if __name__ == "__main__":
     import uvicorn

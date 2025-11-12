@@ -21,7 +21,7 @@ def embed_employees():
     supabase.table("employee_embeddings").delete().neq("id", 0).execute()
     supabase.table("employees").delete().neq("id", 0).execute()
     
-    print(f"Embedding {len(FAKE_EMPLOYEES)} employees...")
+    print(f"Embedding {len(FAKE_EMPLOYEES)} employees with HIGH QUALITY ML model...")
     
     for emp in FAKE_EMPLOYEES:
         supabase.table("employees").insert({
