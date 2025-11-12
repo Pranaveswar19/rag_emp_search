@@ -406,6 +406,50 @@ async def webhook_re_embed(payload: WebhookPayload):
             "error": str(e)
         }
 
+@app.post("/api/admin/re-embed-all")
+async def re_embed_all():
+    """
+    Re-embed ALL employees in the database.
+    Use this after migration or to refresh all embeddings.
+    """
+    try:
+        supabase = get_supabase()
+        
+        # Get all employees
+        result = supabase.table("employees").select("*").execute()
+        employees = result.data
+        
+        if not employees:
+            return {"success": False, "error": "No employees found in database"}
+        
+        success_count = 0
+        for employee in employees:
+            try:
+                # Create embedding
+                embedding = create_employee_embedding(employee)
+                
+                # Upsert embedding
+                supabase.table("employee_embeddings").upsert({
+                    "id": employee["id"],
+                    "embedding": embedding
+                }).execute()
+                
+                success_count += 1
+            except Exception as e:
+                print(f"Error embedding employee {employee['id']}: {e}")
+        
+        return {
+            "success": True,
+            "message": f"Re-embedded {success_count} out of {len(employees)} employees",
+            "total": len(employees),
+            "success_count": success_count
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
