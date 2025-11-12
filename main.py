@@ -181,8 +181,18 @@ def search_employees(query_embedding, filters, limit=50):
     result = query_builder.execute()
     employees_with_embeddings = result.data
     
-    # Removed strict skill filter - let semantic search handle it!
-    # OpenAI embeddings will naturally rank relevant people higher
+    # Apply skill filter MORE STRICTLY
+    # If skills are specified, REQUIRE at least one exact match
+    if "skills" in filters and filters["skills"]:
+        # Exact skill matching - employee must have at least one of the requested skills
+        employees_with_embeddings = [
+            emp for emp in employees_with_embeddings
+            if any(skill.lower() in [s.lower() for s in emp.get("skills", [])] for skill in filters["skills"])
+        ]
+        
+        # If no exact matches found, return empty (don't fallback to semantic)
+        if not employees_with_embeddings:
+            return []
     
     scored_employees = []
     for emp in employees_with_embeddings:
@@ -206,12 +216,6 @@ def search_employees(query_embedding, filters, limit=50):
         
         if emp_embedding and isinstance(emp_embedding, list):
             similarity = sum(float(a) * float(b) for a, b in zip(query_embedding, emp_embedding))
-            
-            # Boost score if exact skill match exists (hybrid approach)
-            if "skills" in filters and filters["skills"]:
-                if any(skill.lower() in [s.lower() for s in emp.get("skills", [])] for skill in filters["skills"]):
-                    similarity *= 1.2  # 20% boost for exact matches
-            
             scored_employees.append((similarity, emp))
     
     scored_employees.sort(reverse=True, key=lambda x: x[0])
@@ -221,25 +225,41 @@ def generate_summary(query, employees):
     if not employees:
         return "No employees found matching your criteria."
     
+    # Limit to top 5 for summary to avoid hallucinations
+    top_employees = employees[:5]
+    
     emp_text = "\n".join([
-        f"- {emp['name']}: {', '.join(emp['skills'][:3])} | {emp['department']} | Joined: {emp['join_date']}"
-        for emp in employees[:10]
+        f"- {emp['name']}: {', '.join(emp['skills'][:4])} | {emp['department']} | {emp['experience_years']} years exp | Joined: {emp['join_date']}"
+        for emp in top_employees
     ])
     
     try:
         groq_client = get_groq_client()
         response = groq_client.chat.completions.create(
             messages=[
-                {"role": "system", "content": "Summarize employee search results in 1-2 sentences."},
-                {"role": "user", "content": f"Query: '{query}'\n\nResults:\n{emp_text}"}
+                {
+                    "role": "system", 
+                    "content": """Summarize employee search results in 1-2 sentences. 
+                    
+IMPORTANT RULES:
+- State the EXACT number of total results found
+- Mention key skills or departments from the TOP results only
+- DO NOT make up names, dates, or skills
+- DO NOT mention dates beyond 2024
+- Keep it factual and brief"""
+                },
+                {
+                    "role": "user", 
+                    "content": f"Query: '{query}'\n\nTotal results: {len(employees)}\n\nTop 5 employees:\n{emp_text}"
+                }
             ],
             model=config.LLM_MODEL,
-            temperature=0.3,
-            max_tokens=150
+            temperature=0,
+            max_tokens=100
         )
         return response.choices[0].message.content
     except:
-        return f"Found {len(employees)} employees matching your search."
+        return f"Found {len(employees)} employees matching '{query}'."
 
 @app.post("/api/search")
 async def search(request: SearchRequest):
