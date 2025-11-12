@@ -1,10 +1,23 @@
-from sentence_transformers import SentenceTransformer
 from supabase import create_client
 import config
 from fake_employees import FAKE_EMPLOYEES
+import numpy as np
 
-model = SentenceTransformer(config.EMBEDDING_MODEL)
 supabase = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
+
+def create_simple_embedding(text, dimension=None):
+    """Lightweight hash-based embedding - 100% free"""
+    if dimension is None:
+        dimension = config.EMBEDDING_DIMENSION
+    words = text.lower().split()
+    embedding = np.zeros(dimension)
+    for i, word in enumerate(words):
+        hash_val = hash(word) % dimension
+        embedding[hash_val] += 1.0 / (i + 1)
+    norm = np.linalg.norm(embedding)
+    if norm > 0:
+        embedding = embedding / norm
+    return embedding.tolist()
 
 def create_employee_text(emp):
     return f"""
@@ -21,7 +34,7 @@ def embed_employees():
     supabase.table("employee_embeddings").delete().neq("id", 0).execute()
     supabase.table("employees").delete().neq("id", 0).execute()
     
-    print(f"Embedding {len(FAKE_EMPLOYEES)} employees with HIGH QUALITY ML model...")
+    print(f"Embedding {len(FAKE_EMPLOYEES)} employees with FREE hash-based embeddings...")
     
     for emp in FAKE_EMPLOYEES:
         supabase.table("employees").insert({
@@ -36,7 +49,7 @@ def embed_employees():
         }).execute()
         
         text = create_employee_text(emp)
-        embedding = model.encode(text).tolist()
+        embedding = create_simple_embedding(text)
         
         supabase.table("employee_embeddings").insert({
             "id": emp["id"],
