@@ -135,7 +135,7 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
         print(f"Filter extraction error: {e}")
         return {}
 
-def search_employees(query_embedding, filters, limit=20):
+def search_employees(query_embedding, filters, limit=50):
     supabase = get_supabase()
     query_builder = supabase.table("employees").select("*, employee_embeddings(embedding)")
     
