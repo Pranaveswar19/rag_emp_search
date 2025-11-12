@@ -74,13 +74,17 @@ Available fields:
 - join_date_after: date string in YYYY-MM-DD format (use this when query says "joined after" or "since")
 - join_date_before: date string in YYYY-MM-DD format (use this when query says "joined before" or "prior to")
 - department: string (Engineering, Data, Design, Product, Marketing, Sales, HR, Finance, Security, QA, Operations, Legal, Business Development, Customer Success)
-- min_experience: integer representing years
+- min_experience: integer representing years (use for "at least X years" or "X+ years")
+- sort_by: string - either "experience_desc" (most experienced), "experience_asc" (least experienced), or "join_date_desc" (most recent)
 
 IMPORTANT: 
 - "skills" should contain ONLY technology names. Ignore words like: developers, engineers, Backend, Frontend, Full-stack, Senior, Junior, people, staff.
 - If query says "joined on [date]" use "join_date", NOT "join_date_after"
 - If query says "joined after [date]" or "since [date]" use "join_date_after"
 - If query says "joined before [date]" or "prior to [date]" use "join_date_before"
+- If query says "most experienced" or "most years" use "sort_by": "experience_desc" (DO NOT use min_experience)
+- If query says "least experienced" or "newest" use "sort_by": "experience_asc"
+- If query says "most recent" or "latest hires" use "sort_by": "join_date_desc"
 
 Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."""
                 },
@@ -123,6 +127,14 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
                 {
                     "role": "assistant",
                     "content": '{"join_date_before": "2024-01-01"}'
+                },
+                {
+                    "role": "user",
+                    "content": "Person with most years of experience"
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"sort_by": "experience_desc"}'
                 },
                 {"role": "user", "content": query}
             ],
@@ -218,7 +230,21 @@ def search_employees(query_embedding, filters, limit=50):
             similarity = sum(float(a) * float(b) for a, b in zip(query_embedding, emp_embedding))
             scored_employees.append((similarity, emp))
     
-    scored_employees.sort(reverse=True, key=lambda x: x[0])
+    # Apply sorting if specified
+    if "sort_by" in filters:
+        if filters["sort_by"] == "experience_desc":
+            # Sort by experience (most to least)
+            scored_employees.sort(key=lambda x: x[1]["experience_years"], reverse=True)
+        elif filters["sort_by"] == "experience_asc":
+            # Sort by experience (least to most)
+            scored_employees.sort(key=lambda x: x[1]["experience_years"])
+        elif filters["sort_by"] == "join_date_desc":
+            # Sort by join date (most recent first)
+            scored_employees.sort(key=lambda x: x[1]["join_date"], reverse=True)
+    else:
+        # Default: sort by similarity score
+        scored_employees.sort(reverse=True, key=lambda x: x[0])
+    
     return [emp for _, emp in scored_employees[:limit]]
 
 def generate_summary(query, employees):
