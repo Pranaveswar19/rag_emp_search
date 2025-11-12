@@ -110,23 +110,34 @@
         async function performSearch() {
             const query = searchInput.value.trim();
             if (!query) return alert('Please enter a search query');
-            
+
             searchBtn.disabled = true;
             searchBtn.textContent = 'Searching...';
-            
+
+            console.log('Starting search for:', query);
+
             try {
                 const response = await fetch('/api/search', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({query})
                 });
-                
-                if (!response.ok) throw new Error('Search failed');
-                
+
+                console.log('Response status:', response.status);
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => null);
+                    const errorMessage = errorData?.detail || 'Search failed. Please try again.';
+                    console.error('Search error:', errorMessage);
+                    throw new Error(errorMessage);
+                }
+
                 const data = await response.json();
+                console.log('Search results:', data.count, 'employees found');
                 displayResults(data);
-                
+
             } catch(error) {
+                console.error('Error during search:', error);
                 alert('Error: ' + error.message);
             } finally {
                 searchBtn.disabled = false;

@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -9,6 +9,7 @@ import config
 import json
 import numpy as np
 from datetime import datetime
+import time
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -51,14 +52,15 @@ def create_simple_embedding(text, dimension=None):
 class SearchRequest(BaseModel):
     query: str
 
-def extract_filters(query):
-    try:
-        groq_client = get_groq_client()
-        response = groq_client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": """Extract filters from employee search queries. Return ONLY a JSON object, nothing else.
+def extract_filters(query, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            groq_client = get_groq_client()
+            response = groq_client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """Extract filters from employee search queries. Return ONLY a JSON object, nothing else.
 
 Available fields:
 - skills: array of specific programming languages, frameworks, or technologies (e.g., Python, React, AWS, Docker)
@@ -134,32 +136,36 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
             temperature=0,
             max_tokens=150
         )
-        content = response.choices[0].message.content.strip()
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
-        
-        filters = json.loads(content)
-        
-        # Post-process: remove non-technology words from skills
-        if "skills" in filters and filters["skills"]:
-            blacklist = {
-                "developers", "developer", "engineers", "engineer", "backend", "frontend",
-                "full-stack", "fullstack", "senior", "junior", "staff", "people", "expert",
-                "specialist", "lead", "principal", "architect", "manager", "programmers",
-                "programmer", "coders", "coder"
-            }
-            filters["skills"] = [
-                skill for skill in filters["skills"]
-                if skill.lower() not in blacklist
-            ]
-        
-        return filters
-    except Exception as e:
-        print(f"Filter extraction error: {e}")
-        return {}
+            content = response.choices[0].message.content.strip()
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+
+            filters = json.loads(content)
+
+            # Post-process: remove non-technology words from skills
+            if "skills" in filters and filters["skills"]:
+                blacklist = {
+                    "developers", "developer", "engineers", "engineer", "backend", "frontend",
+                    "full-stack", "fullstack", "senior", "junior", "staff", "people", "expert",
+                    "specialist", "lead", "principal", "architect", "manager", "programmers",
+                    "programmer", "coders", "coder"
+                }
+                filters["skills"] = [
+                    skill for skill in filters["skills"]
+                    if skill.lower() not in blacklist
+                ]
+
+            return filters
+        except Exception as e:
+            print(f"Filter extraction error (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+            else:
+                # If all retries fail, return empty filters instead of breaking
+                return {}
 
 def search_employees(query_embedding, filters, limit=50):
     supabase = get_supabase()
@@ -222,61 +228,93 @@ def search_employees(query_embedding, filters, limit=50):
     
     return [emp for _, emp in scored_employees[:limit]]
 
-def generate_summary(query, employees):
+def generate_summary(query, employees, max_retries=3):
     if not employees:
         return "No employees found matching your criteria."
-    
+
     top_employees = employees[:5]
     emp_text = "\n".join([
         f"- {emp['name']}: {', '.join(emp['skills'][:4])} | {emp['department']} | {emp['experience_years']} years | {emp['join_date']}"
         for emp in top_employees
     ])
-    
-    try:
-        response = get_groq_client().chat.completions.create(
-            messages=[
-                {
-                    "role": "system", 
-                    "content": "Summarize employee search results in 1-2 sentences. State EXACT number found. Mention key skills/departments from TOP results only. Keep factual and brief."
-                },
-                {
-                    "role": "user", 
-                    "content": f"Query: '{query}'\nTotal: {len(employees)}\nTop 5:\n{emp_text}"
-                }
-            ],
-            model=config.LLM_MODEL,
-            temperature=0,
-            max_tokens=100
-        )
-        return response.choices[0].message.content
-    except:
-        return f"Found {len(employees)} employees matching '{query}'."
+
+    for attempt in range(max_retries):
+        try:
+            response = get_groq_client().chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Summarize employee search results in 1-2 sentences. State EXACT number found. Mention key skills/departments from TOP results only. Keep factual and brief."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Query: '{query}'\nTotal: {len(employees)}\nTop 5:\n{emp_text}"
+                    }
+                ],
+                model=config.LLM_MODEL,
+                temperature=0,
+                max_tokens=100
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Summary generation error (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                return f"Found {len(employees)} employees matching '{query}'."
 
 @app.post("/api/search")
 async def search(request: SearchRequest):
-    filters = extract_filters(request.query)
-    query_embedding = create_simple_embedding(request.query)
-    employees = search_employees(query_embedding, filters)
-    summary = generate_summary(request.query, employees)
-    
-    clean_employees = [{
-        "id": emp["id"],
-        "name": emp["name"],
-        "skills": emp["skills"],
-        "department": emp["department"],
-        "join_date": emp["join_date"],
-        "experience_years": emp["experience_years"],
-        "bio": emp["bio"],
-        "email": emp["email"]
-    } for emp in employees]
-    
-    return {
-        "success": True,
-        "employees": clean_employees,
-        "summary": summary,
-        "count": len(clean_employees),
-        "filters_applied": filters
-    }
+    try:
+        # Validate input
+        if not request.query or not request.query.strip():
+            raise HTTPException(status_code=400, detail="Search query cannot be empty")
+
+        print(f"Search query: {request.query}")
+
+        # Extract filters with retry logic
+        filters = extract_filters(request.query)
+        print(f"Extracted filters: {filters}")
+
+        # Create embedding
+        query_embedding = create_simple_embedding(request.query)
+
+        # Search employees
+        try:
+            employees = search_employees(query_embedding, filters)
+        except Exception as e:
+            print(f"Database search error: {e}")
+            raise HTTPException(status_code=503, detail=f"Database connection error. Please try again.")
+
+        # Generate summary with retry logic
+        summary = generate_summary(request.query, employees)
+
+        clean_employees = [{
+            "id": emp["id"],
+            "name": emp["name"],
+            "skills": emp["skills"],
+            "department": emp["department"],
+            "join_date": emp["join_date"],
+            "experience_years": emp["experience_years"],
+            "bio": emp["bio"],
+            "email": emp["email"]
+        } for emp in employees]
+
+        print(f"Search completed: {len(clean_employees)} results")
+
+        return {
+            "success": True,
+            "employees": clean_employees,
+            "summary": summary,
+            "count": len(clean_employees),
+            "filters_applied": filters
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Unexpected error in search endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/")
 async def root():
