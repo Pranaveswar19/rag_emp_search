@@ -8,14 +8,10 @@ from groq import Groq
 import config
 import json
 import numpy as np
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 
 app = FastAPI()
-
-# Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,7 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Lazy load clients
 _supabase = None
 _groq_client = None
 
@@ -41,7 +36,6 @@ def get_groq_client():
     return _groq_client
 
 def create_simple_embedding(text, dimension=None):
-    """Lightweight hash-based embedding - 100% free, no external APIs"""
     if dimension is None:
         dimension = config.EMBEDDING_DIMENSION
     words = text.lower().split()
@@ -171,15 +165,11 @@ def search_employees(query_embedding, filters, limit=50):
     supabase = get_supabase()
     query_builder = supabase.table("employees").select("*, employee_embeddings(embedding)")
     
-    # Apply hard filters for date, department, and experience
     if "join_date" in filters:
-        # Exact date match
         query_builder = query_builder.eq("join_date", filters["join_date"])
     elif "join_date_after" in filters:
-        # Date range (after)
         query_builder = query_builder.gte("join_date", filters["join_date_after"])
     elif "join_date_before" in filters:
-        # Date range (before)
         query_builder = query_builder.lt("join_date", filters["join_date_before"])
     
     if "department" in filters:
@@ -188,19 +178,13 @@ def search_employees(query_embedding, filters, limit=50):
     if "min_experience" in filters:
         query_builder = query_builder.gte("experience_years", filters["min_experience"])
     
-    result = query_builder.execute()
-    employees_with_embeddings = result.data
+    employees_with_embeddings = query_builder.execute().data
     
-    # Apply skill filter MORE STRICTLY
-    # If skills are specified, REQUIRE at least one exact match
     if "skills" in filters and filters["skills"]:
-        # Exact skill matching - employee must have at least one of the requested skills
         employees_with_embeddings = [
             emp for emp in employees_with_embeddings
             if any(skill.lower() in [s.lower() for s in emp.get("skills", [])] for skill in filters["skills"])
         ]
-        
-        # If no exact matches found, return empty (don't fallback to semantic)
         if not employees_with_embeddings:
             return []
     
@@ -209,12 +193,10 @@ def search_employees(query_embedding, filters, limit=50):
         emp_embedding = None
         
         if "employee_embeddings" in emp:
-            if isinstance(emp["employee_embeddings"], list) and len(emp["employee_embeddings"]) > 0:
-                emb_data = emp["employee_embeddings"][0].get("embedding")
-            elif isinstance(emp["employee_embeddings"], dict):
-                emb_data = emp["employee_embeddings"].get("embedding")
-            else:
-                continue
+            emb_data = (emp["employee_embeddings"][0].get("embedding") 
+                       if isinstance(emp["employee_embeddings"], list) and emp["employee_embeddings"]
+                       else emp["employee_embeddings"].get("embedding") if isinstance(emp["employee_embeddings"], dict)
+                       else None)
             
             if isinstance(emb_data, str):
                 try:
@@ -228,20 +210,15 @@ def search_employees(query_embedding, filters, limit=50):
             similarity = sum(float(a) * float(b) for a, b in zip(query_embedding, emp_embedding))
             scored_employees.append((similarity, emp))
     
-    # Apply sorting if specified
     if "sort_by" in filters:
-        if filters["sort_by"] == "experience_desc":
-            # Sort by experience (most to least)
-            scored_employees.sort(key=lambda x: x[1]["experience_years"], reverse=True)
-        elif filters["sort_by"] == "experience_asc":
-            # Sort by experience (least to most)
-            scored_employees.sort(key=lambda x: x[1]["experience_years"])
-        elif filters["sort_by"] == "join_date_desc":
-            # Sort by join date (most recent first)
-            scored_employees.sort(key=lambda x: x[1]["join_date"], reverse=True)
+        sort_key = {
+            "experience_desc": lambda x: (-x[1]["experience_years"], x[0]),
+            "experience_asc": lambda x: (x[1]["experience_years"], x[0]),
+            "join_date_desc": lambda x: (-ord(x[1]["join_date"][0]), x[0])
+        }.get(filters["sort_by"], lambda x: -x[0])
+        scored_employees.sort(key=sort_key)
     else:
-        # Default: sort by similarity score
-        scored_employees.sort(reverse=True, key=lambda x: x[0])
+        scored_employees.sort(key=lambda x: -x[0])
     
     return [emp for _, emp in scored_employees[:limit]]
 
@@ -249,32 +226,22 @@ def generate_summary(query, employees):
     if not employees:
         return "No employees found matching your criteria."
     
-    # Limit to top 5 for summary to avoid hallucinations
     top_employees = employees[:5]
-    
     emp_text = "\n".join([
-        f"- {emp['name']}: {', '.join(emp['skills'][:4])} | {emp['department']} | {emp['experience_years']} years exp | Joined: {emp['join_date']}"
+        f"- {emp['name']}: {', '.join(emp['skills'][:4])} | {emp['department']} | {emp['experience_years']} years | {emp['join_date']}"
         for emp in top_employees
     ])
     
     try:
-        groq_client = get_groq_client()
-        response = groq_client.chat.completions.create(
+        response = get_groq_client().chat.completions.create(
             messages=[
                 {
                     "role": "system", 
-                    "content": """Summarize employee search results in 1-2 sentences. 
-                    
-IMPORTANT RULES:
-- State the EXACT number of total results found
-- Mention key skills or departments from the TOP results only
-- DO NOT make up names, dates, or skills
-- DO NOT mention dates beyond 2024
-- Keep it factual and brief"""
+                    "content": "Summarize employee search results in 1-2 sentences. State EXACT number found. Mention key skills/departments from TOP results only. Keep factual and brief."
                 },
                 {
                     "role": "user", 
-                    "content": f"Query: '{query}'\n\nTotal results: {len(employees)}\n\nTop 5 employees:\n{emp_text}"
+                    "content": f"Query: '{query}'\nTotal: {len(employees)}\nTop 5:\n{emp_text}"
                 }
             ],
             model=config.LLM_MODEL,
@@ -288,24 +255,20 @@ IMPORTANT RULES:
 @app.post("/api/search")
 async def search(request: SearchRequest):
     filters = extract_filters(request.query)
-    # Use hash-based embeddings (free)
     query_embedding = create_simple_embedding(request.query)
     employees = search_employees(query_embedding, filters)
     summary = generate_summary(request.query, employees)
     
-    clean_employees = []
-    for emp in employees:
-        clean_emp = {
-            "id": emp["id"],
-            "name": emp["name"],
-            "skills": emp["skills"],
-            "department": emp["department"],
-            "join_date": emp["join_date"],
-            "experience_years": emp["experience_years"],
-            "bio": emp["bio"],
-            "email": emp["email"]
-        }
-        clean_employees.append(clean_emp)
+    clean_employees = [{
+        "id": emp["id"],
+        "name": emp["name"],
+        "skills": emp["skills"],
+        "department": emp["department"],
+        "join_date": emp["join_date"],
+        "experience_years": emp["experience_years"],
+        "bio": emp["bio"],
+        "email": emp["email"]
+    } for emp in employees]
     
     return {
         "success": True,
@@ -333,28 +296,21 @@ class EmployeeCreate(BaseModel):
     email: str
 
 def create_employee_embedding(employee_data):
-    """Helper function to create hash-based embedding (free)"""
-    text = f"""
-    Name: {employee_data['name']}
+    text = f"""Name: {employee_data['name']}
     Skills: {', '.join(employee_data['skills'])}
     Department: {employee_data['department']}
     Experience: {employee_data['experience_years']} years
     Bio: {employee_data['bio']}
-    Joined: {employee_data['join_date']}
-    """
+    Joined: {employee_data['join_date']}"""
     return create_simple_embedding(text)
 
 @app.post("/api/admin/add_employee")
 async def add_employee(employee: EmployeeCreate):
-    """Add a new employee with automatic embedding generation"""
     try:
         supabase = get_supabase()
-        
-        # Get next available ID
         result = supabase.table("employees").select("id").order("id", desc=True).limit(1).execute()
         next_id = (result.data[0]["id"] + 1) if result.data else 1
         
-        # Insert employee
         emp_data = {
             "id": next_id,
             "name": employee.name,
@@ -367,31 +323,20 @@ async def add_employee(employee: EmployeeCreate):
         }
         supabase.table("employees").insert(emp_data).execute()
         
-        # Create and insert embedding
         embedding = create_employee_embedding(emp_data)
         supabase.table("employee_embeddings").insert({
             "id": next_id,
             "embedding": embedding
         }).execute()
         
-        return {
-            "success": True,
-            "message": f"Employee {employee.name} added successfully",
-            "id": next_id
-        }
+        return {"success": True, "message": f"Employee {employee.name} added", "id": next_id}
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 @app.put("/api/admin/update_employee/{employee_id}")
 async def update_employee(employee_id: int, employee: EmployeeCreate):
-    """Update employee and automatically re-create embedding"""
     try:
         supabase = get_supabase()
-        
-        # Update employee data
         emp_data = {
             "name": employee.name,
             "skills": employee.skills,
@@ -403,44 +348,23 @@ async def update_employee(employee_id: int, employee: EmployeeCreate):
         }
         supabase.table("employees").update(emp_data).eq("id", employee_id).execute()
         
-        # Re-create embedding
         emp_data["id"] = employee_id
         embedding = create_employee_embedding(emp_data)
-        supabase.table("employee_embeddings").update({
-            "embedding": embedding
-        }).eq("id", employee_id).execute()
+        supabase.table("employee_embeddings").update({"embedding": embedding}).eq("id", employee_id).execute()
         
-        return {
-            "success": True,
-            "message": f"Employee {employee.name} updated successfully"
-        }
+        return {"success": True, "message": f"Employee {employee.name} updated"}
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 @app.delete("/api/admin/delete_employee/{employee_id}")
 async def delete_employee(employee_id: int):
-    """Delete employee and their embedding"""
     try:
         supabase = get_supabase()
-        
-        # Delete embedding first (foreign key constraint)
         supabase.table("employee_embeddings").delete().eq("id", employee_id).execute()
-        
-        # Delete employee
         supabase.table("employees").delete().eq("id", employee_id).execute()
-        
-        return {
-            "success": True,
-            "message": f"Employee {employee_id} deleted successfully"
-        }
+        return {"success": True, "message": f"Employee {employee_id} deleted"}
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 class WebhookPayload(BaseModel):
     employee_id: int
@@ -448,83 +372,52 @@ class WebhookPayload(BaseModel):
 
 @app.post("/api/admin/webhook/re-embed")
 async def webhook_re_embed(payload: WebhookPayload):
-    """
-    Webhook endpoint called by Supabase trigger when employee data changes.
-    Automatically re-creates embeddings when HR updates Supabase directly.
-    """
     try:
         supabase = get_supabase()
-        
-        # Get employee data
         result = supabase.table("employees").select("*").eq("id", payload.employee_id).execute()
         if not result.data:
             return {"success": False, "error": "Employee not found"}
         
-        employee = result.data[0]
-        
-        # Create new embedding
-        embedding = create_employee_embedding(employee)
-        
-        # Update or insert embedding
+        embedding = create_employee_embedding(result.data[0])
         supabase.table("employee_embeddings").upsert({
             "id": payload.employee_id,
             "embedding": embedding
         }).execute()
         
-        return {
-            "success": True,
-            "message": f"Re-embedded employee {payload.employee_id}"
-        }
+        return {"success": True, "message": f"Re-embedded employee {payload.employee_id}"}
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 @app.get("/api/admin/re-embed-all")
 @app.post("/api/admin/re-embed-all")
 async def re_embed_all():
-    """
-    Re-embed ALL employees in the database.
-    Use this after migration or to refresh all embeddings.
-    """
     try:
         supabase = get_supabase()
-        
-        # Get all employees
-        result = supabase.table("employees").select("*").execute()
-        employees = result.data
+        employees = supabase.table("employees").select("*").execute().data
         
         if not employees:
-            return {"success": False, "error": "No employees found in database"}
+            return {"success": False, "error": "No employees found"}
         
         success_count = 0
         for employee in employees:
             try:
-                # Create embedding
                 embedding = create_employee_embedding(employee)
-                
-                # Upsert embedding
                 supabase.table("employee_embeddings").upsert({
                     "id": employee["id"],
                     "embedding": embedding
                 }).execute()
-                
                 success_count += 1
             except Exception as e:
                 print(f"Error embedding employee {employee['id']}: {e}")
         
         return {
             "success": True,
-            "message": f"Re-embedded {success_count} out of {len(employees)} employees",
+            "message": f"Re-embedded {success_count}/{len(employees)} employees",
             "total": len(employees),
             "success_count": success_count
         }
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
