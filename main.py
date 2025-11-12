@@ -5,7 +5,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from supabase import create_client
 from groq import Groq
-from sentence_transformers import SentenceTransformer
 import config
 import json
 from datetime import datetime, timedelta
@@ -28,7 +27,6 @@ app.add_middleware(
 # Lazy load clients to reduce startup memory
 _supabase = None
 _groq_client = None
-_model = None
 
 def get_supabase():
     global _supabase
@@ -42,23 +40,13 @@ def get_groq_client():
         _groq_client = Groq(api_key=config.GROQ_API_KEY)
     return _groq_client
 
-def get_model():
-    """Lazy load sentence transformer model for high-quality embeddings"""
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(config.EMBEDDING_MODEL)
-    return _model
-
-# Keep simple embedding as fallback
 def create_simple_embedding(text, dimension=384):
-    """Create a simple embedding based on keywords - no ML model needed"""
+    """Lightweight hash-based embedding - works on free tier"""
     words = text.lower().split()
-    # Simple hash-based embedding
     embedding = np.zeros(dimension)
     for i, word in enumerate(words):
         hash_val = hash(word) % dimension
-        embedding[hash_val] += 1.0 / (i + 1)  # Position-weighted
-    # Normalize
+        embedding[hash_val] += 1.0 / (i + 1)
     norm = np.linalg.norm(embedding)
     if norm > 0:
         embedding = embedding / norm
@@ -221,9 +209,7 @@ def generate_summary(query, employees):
 @app.post("/api/search")
 async def search(request: SearchRequest):
     filters = extract_filters(request.query)
-    # Use high-quality ML model for embeddings
-    model = get_model()
-    query_embedding = model.encode(request.query).tolist()
+    query_embedding = create_simple_embedding(request.query)
     employees = search_employees(query_embedding, filters)
     summary = generate_summary(request.query, employees)
     
@@ -267,7 +253,7 @@ class EmployeeCreate(BaseModel):
     email: str
 
 def create_employee_embedding(employee_data):
-    """Helper function to create HIGH QUALITY embedding from employee data"""
+    """Helper function to create embedding from employee data"""
     text = f"""
     Name: {employee_data['name']}
     Skills: {', '.join(employee_data['skills'])}
@@ -276,8 +262,7 @@ def create_employee_embedding(employee_data):
     Bio: {employee_data['bio']}
     Joined: {employee_data['join_date']}
     """
-    model = get_model()
-    return model.encode(text).tolist()
+    return create_simple_embedding(text)
 
 @app.post("/api/admin/add_employee")
 async def add_employee(employee: EmployeeCreate):
