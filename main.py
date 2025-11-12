@@ -406,6 +406,7 @@ async def webhook_re_embed(payload: WebhookPayload):
             "error": str(e)
         }
 
+@app.get("/api/admin/re-embed-all")
 @app.post("/api/admin/re-embed-all")
 async def re_embed_all():
     """
