@@ -71,11 +71,16 @@ Available fields:
 - min_experience: integer representing years (use for "at least X years" or "X+ years")
 - sort_by: string - either "experience_desc" (most experienced), "experience_asc" (least experienced), or "join_date_desc" (most recent)
 
-IMPORTANT: 
+CRITICAL RULES FOR DATE FILTERING:
+- "joined after YYYY" (year only) → use "join_date_after": "YYYY-12-31" (NOT "YYYY-01-01")
+- "joined after YYYY-MM-DD" (full date) → use "join_date_after": "YYYY-MM-DD"
+- "joined before YYYY" (year only) → use "join_date_before": "YYYY-01-01"
+- "joined before YYYY-MM-DD" (full date) → use "join_date_before": "YYYY-MM-DD"
+- "joined in YYYY" → use both "join_date_after": "YYYY-01-01" AND "join_date_before": "YYYY-12-31" (keep both separate)
+
+OTHER IMPORTANT RULES:
 - "skills" should contain ONLY technology names. Ignore words like: developers, engineers, Backend, Frontend, Full-stack, Senior, Junior, people, staff.
 - If query says "joined on [date]" use "join_date", NOT "join_date_after"
-- If query says "joined after [date]" or "since [date]" use "join_date_after"
-- If query says "joined before [date]" or "prior to [date]" use "join_date_before"
 - If query says "most experienced" or "most years" use "sort_by": "experience_desc" (DO NOT use min_experience)
 - If query says "least experienced" or "newest" use "sort_by": "experience_asc"
 - If query says "most recent" or "latest hires" use "sort_by": "join_date_desc"
@@ -124,6 +129,22 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
                 },
                 {
                     "role": "user",
+                    "content": "People who joined after 2023"
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"join_date_after": "2023-12-31"}'
+                },
+                {
+                    "role": "user",
+                    "content": "Employees who joined in 2024"
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"join_date_after": "2024-01-01", "join_date_before": "2024-12-31"}'
+                },
+                {
+                    "role": "user",
                     "content": "Person with most years of experience"
                 },
                 {
@@ -158,6 +179,20 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
                     if skill.lower() not in blacklist
                 ]
 
+            # Validate date formats
+            for date_key in ["join_date", "join_date_after", "join_date_before"]:
+                if date_key in filters:
+                    try:
+                        # Validate date format YYYY-MM-DD
+                        date_parts = filters[date_key].split('-')
+                        if len(date_parts) != 3:
+                            print(f"Invalid date format for {date_key}: {filters[date_key]}")
+                            del filters[date_key]
+                    except:
+                        print(f"Error validating {date_key}: {filters.get(date_key)}")
+                        if date_key in filters:
+                            del filters[date_key]
+
             return filters
         except Exception as e:
             print(f"Filter extraction error (attempt {attempt + 1}/{max_retries}): {e}")
@@ -170,21 +205,29 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
 def search_employees(query_embedding, filters, limit=50):
     supabase = get_supabase()
     query_builder = supabase.table("employees").select("*, employee_embeddings(embedding)")
-    
+
+    # Handle date filters - can have both after and before for range queries
     if "join_date" in filters:
+        print(f"Filtering by exact join_date: {filters['join_date']}")
         query_builder = query_builder.eq("join_date", filters["join_date"])
-    elif "join_date_after" in filters:
-        query_builder = query_builder.gte("join_date", filters["join_date_after"])
-    elif "join_date_before" in filters:
-        query_builder = query_builder.lt("join_date", filters["join_date_before"])
-    
+    else:
+        if "join_date_after" in filters:
+            print(f"Filtering join_date > {filters['join_date_after']}")
+            query_builder = query_builder.gt("join_date", filters["join_date_after"])
+        if "join_date_before" in filters:
+            print(f"Filtering join_date < {filters['join_date_before']}")
+            query_builder = query_builder.lt("join_date", filters["join_date_before"])
+
     if "department" in filters:
+        print(f"Filtering by department: {filters['department']}")
         query_builder = query_builder.eq("department", filters["department"])
-    
+
     if "min_experience" in filters:
+        print(f"Filtering min_experience >= {filters['min_experience']}")
         query_builder = query_builder.gte("experience_years", filters["min_experience"])
-    
+
     employees_with_embeddings = query_builder.execute().data
+    print(f"Database returned {len(employees_with_embeddings)} employees after filters")
     
     if "skills" in filters and filters["skills"]:
         employees_with_embeddings = [
