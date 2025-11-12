@@ -72,6 +72,7 @@ Available fields:
 - skills: array of specific programming languages, frameworks, or technologies (e.g., Python, React, AWS, Docker)
 - join_date: exact date string in YYYY-MM-DD format (use this when query says "joined on" or "hired on" specific date)
 - join_date_after: date string in YYYY-MM-DD format (use this when query says "joined after" or "since")
+- join_date_before: date string in YYYY-MM-DD format (use this when query says "joined before" or "prior to")
 - department: string (Engineering, Data, Design, Product, Marketing, Sales, HR, Finance, Security, QA, Operations, Legal, Business Development, Customer Success)
 - min_experience: integer representing years
 
@@ -79,6 +80,7 @@ IMPORTANT:
 - "skills" should contain ONLY technology names. Ignore words like: developers, engineers, Backend, Frontend, Full-stack, Senior, Junior, people, staff.
 - If query says "joined on [date]" use "join_date", NOT "join_date_after"
 - If query says "joined after [date]" or "since [date]" use "join_date_after"
+- If query says "joined before [date]" or "prior to [date]" use "join_date_before"
 
 Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."""
                 },
@@ -113,6 +115,14 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
                 {
                     "role": "assistant",
                     "content": '{"join_date": "2023-09-15"}'
+                },
+                {
+                    "role": "user",
+                    "content": "Employees who joined before 2024"
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"join_date_before": "2024-01-01"}'
                 },
                 {"role": "user", "content": query}
             ],
@@ -158,6 +168,9 @@ def search_employees(query_embedding, filters, limit=50):
     elif "join_date_after" in filters:
         # Date range (after)
         query_builder = query_builder.gte("join_date", filters["join_date_after"])
+    elif "join_date_before" in filters:
+        # Date range (before)
+        query_builder = query_builder.lt("join_date", filters["join_date_before"])
     
     if "department" in filters:
         query_builder = query_builder.eq("department", filters["department"])
