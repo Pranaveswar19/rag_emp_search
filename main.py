@@ -70,20 +70,20 @@ SEARCH_FUNCTION_SCHEMA = {
             },
             "experience": {
                 "type": "object",
-                "description": "Years of experience filter",
+                "description": "Years of experience filter. DEFAULT to '=' (exactly) unless query explicitly says 'at least', 'or more', '+', 'above', 'below', 'less than', etc.",
                 "properties": {
                     "operator": {
                         "type": "string",
                         "enum": ["=", ">=", "<=", ">", "<", "between"],
-                        "description": "Comparison operator: = (exactly), >= (at least/or more), <= (at most/or less), > (more than/above), < (less than/below), between (range)"
+                        "description": "Operator selection guide: Use '=' for 'X years', 'with X years', 'exactly X years' (DEFAULT). Use '>=' for 'X+', 'at least X', 'X or more', 'minimum X'. Use '<=' for 'at most X', 'X or less', 'up to X', 'maximum X'. Use '>' for 'more than X', 'above X', 'over X'. Use '<' for 'less than X', 'below X', 'under X'. Use 'between' for 'between X and Y', 'X to Y years'."
                     },
                     "value": {
                         "type": "integer",
-                        "description": "Experience in years"
+                        "description": "Experience in years (first value or exact value)"
                     },
                     "value2": {
                         "type": "integer",
-                        "description": "Second value for 'between' operator"
+                        "description": "Second value only for 'between' operator"
                     }
                 },
                 "required": ["operator", "value"]
