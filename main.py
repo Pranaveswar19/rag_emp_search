@@ -52,6 +52,158 @@ def create_simple_embedding(text, dimension=None):
 class SearchRequest(BaseModel):
     query: str
 
+FILTER_SCHEMA = {
+    "skills": {
+        "type": "array",
+        "description": "Specific programming languages, frameworks, or technologies",
+        "examples": ["Python", "React", "AWS", "Docker"],
+        "blacklist": {
+            "developers", "developer", "engineers", "engineer", "backend", "frontend",
+            "full-stack", "fullstack", "senior", "junior", "staff", "people", "expert",
+            "specialist", "lead", "principal", "architect", "manager", "programmers",
+            "programmer", "coders", "coder"
+        }
+    },
+    "department": {
+        "type": "string",
+        "values": ["Engineering", "Data", "Design", "Product", "Marketing", "Sales", 
+                   "HR", "Finance", "Security", "QA", "Operations", "Legal", 
+                   "Business Development", "Customer Success"]
+    },
+    "exact_experience": {
+        "type": "integer",
+        "keywords": ["years", "exactly", "with X years", "X years experience"],
+        "examples": ["5 years experience", "exactly 3 years", "with 7 years"]
+    },
+    "min_experience": {
+        "type": "integer",
+        "keywords": ["at least", "or more", "or higher", "+", "minimum"],
+        "exclusive_keywords": ["above", "over"],
+        "offset": 1,
+        "examples": ["5+ years", "at least 5 years", "above 5 years → 6"]
+    },
+    "max_experience": {
+        "type": "integer",
+        "keywords": ["or less", "or lower", "or fewer", "up to", "maximum"],
+        "exclusive_keywords": ["below", "under", "less than"],
+        "offset": -1,
+        "examples": ["5 or less", "up to 5 years", "below 5 years → 4"]
+    },
+    "join_date": {
+        "type": "date",
+        "format": "YYYY-MM-DD",
+        "keywords": ["joined on", "hired on"]
+    },
+    "join_date_after": {
+        "type": "date",
+        "format": "YYYY-MM-DD",
+        "keywords": ["joined after", "hired after", "since"]
+    },
+    "join_date_before": {
+        "type": "date",
+        "format": "YYYY-MM-DD",
+        "keywords": ["joined before", "hired before", "prior to"]
+    },
+    "sort_by": {
+        "type": "string",
+        "values": {
+            "experience_desc": ["most experienced", "most years", "highest experience"],
+            "experience_asc": ["least experienced", "newest", "lowest experience"],
+            "join_date_desc": ["most recent", "latest hires", "recently joined"]
+        }
+    }
+}
+
+FEW_SHOT_EXAMPLES = [
+    ("Python developers", {"skills": ["Python"]}),
+    ("Backend developers in Engineering department", {"department": "Engineering"}),
+    ("React developers with 5 years experience", {"skills": ["React"], "exact_experience": 5}),
+    ("Developers with 5+ years experience", {"min_experience": 5}),
+    ("Python devs with 5 years of experience or lower", {"skills": ["Python"], "max_experience": 5}),
+    ("Engineers with less than 3 years experience", {"max_experience": 2}),
+    ("People with above 10 years experience", {"min_experience": 11}),
+    ("Developers between 3 and 7 years experience", {"min_experience": 3, "max_experience": 7}),
+    ("Employees who joined on 2023-09-15", {"join_date": "2023-09-15"}),
+    ("Employees who joined before 2024", {"join_date_before": "2024-01-01"}),
+    ("People who joined after 2023", {"join_date_after": "2023-12-31"}),
+    ("Employees who joined in 2024", {"join_date_after": "2024-01-01", "join_date_before": "2024-12-31"}),
+    ("Person with most years of experience", {"sort_by": "experience_desc"})
+]
+
+def build_filter_prompt():
+    available_fields = []
+    for field, schema in FILTER_SCHEMA.items():
+        field_type = schema["type"]
+        desc = schema.get("description", "")
+        if "keywords" in schema:
+            keywords = ", ".join(f'"{k}"' for k in schema["keywords"])
+            available_fields.append(f"- {field}: {field_type} (use for: {keywords})")
+        else:
+            available_fields.append(f"- {field}: {field_type}")
+    
+    rules = [
+        "EXPERIENCE RULES:",
+        '- "X years" → exact_experience: X',
+        '- "X+" or "at least X" → min_experience: X',
+        '- "X or less" → max_experience: X',
+        '- "below X" or "under X" → max_experience: X-1',
+        '- "above X" or "over X" → min_experience: X+1',
+        '- "between X and Y" → min_experience: X, max_experience: Y',
+        '- When ambiguous, prefer exact_experience',
+        "",
+        "DATE RULES:",
+        '- "joined after YYYY" → join_date_after: "YYYY-12-31"',
+        '- "joined before YYYY" → join_date_before: "YYYY-01-01"',
+        '- "joined in YYYY" → both join_date_after and join_date_before',
+        "",
+        "GENERAL RULES:",
+        '- Skills: ONLY technology names (ignore role descriptions)',
+        '- "most experienced" → sort_by, NOT min_experience',
+        f'- Today: {datetime.now().strftime("%Y-%m-%d")}'
+    ]
+    
+    return "Extract filters from employee search queries. Return ONLY a JSON object.\n\nAvailable fields:\n" + \
+           "\n".join(available_fields) + "\n\n" + "\n".join(rules)
+
+def validate_and_clean_filters(filters):
+    cleaned = {}
+    
+    for field, value in filters.items():
+        if field not in FILTER_SCHEMA:
+            continue
+            
+        schema = FILTER_SCHEMA[field]
+        
+        if schema["type"] == "array" and isinstance(value, list):
+            if "blacklist" in schema:
+                value = [v for v in value if v.lower() not in schema["blacklist"]]
+            if value:
+                cleaned[field] = value
+                
+        elif schema["type"] == "string":
+            if "values" in schema and isinstance(schema["values"], dict):
+                cleaned[field] = value
+            elif "values" in schema and value in schema["values"]:
+                cleaned[field] = value
+            else:
+                cleaned[field] = value
+                
+        elif schema["type"] == "integer":
+            try:
+                cleaned[field] = int(value)
+            except (ValueError, TypeError):
+                print(f"Invalid integer for {field}: {value}")
+                
+        elif schema["type"] == "date":
+            try:
+                parts = value.split('-')
+                if len(parts) == 3 and all(p.isdigit() for p in parts):
+                    cleaned[field] = value
+            except:
+                print(f"Invalid date for {field}: {value}")
+    
+    return cleaned
+
 def extract_filters(query, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -68,8 +220,21 @@ Available fields:
 - join_date_after: date string in YYYY-MM-DD format (use this when query says "joined after" or "since")
 - join_date_before: date string in YYYY-MM-DD format (use this when query says "joined before" or "prior to")
 - department: string (Engineering, Data, Design, Product, Marketing, Sales, HR, Finance, Security, QA, Operations, Legal, Business Development, Customer Success)
-- min_experience: integer representing years (use for "at least X years" or "X+ years")
+- exact_experience: integer for exact years (use for "X years", "exactly X years", "with X years experience")
+- min_experience: integer for minimum years (use for "X+ years", "at least X years", "X or more years")
+- max_experience: integer for maximum years (use for "X or less", "X or fewer", "X or lower", "under X years", "less than X years")
 - sort_by: string - either "experience_desc" (most experienced), "experience_asc" (least experienced), or "join_date_desc" (most recent)
+
+CRITICAL RULES FOR EXPERIENCE FILTERING:
+- "5 years experience" → exact_experience: 5
+- "5+ years" or "at least 5 years" → min_experience: 5
+- "5 or lower" or "5 or less" → max_experience: 5
+- "below 5 years" or "under 5 years" → max_experience: 4
+- "above 5 years" or "over 5 years" → min_experience: 6
+- "between 3 and 7 years" → min_experience: 3, max_experience: 7
+- When ambiguous, prefer exact_experience
+- NEVER use min_experience for phrases with "or less", "or lower", "below", "under"
+- NEVER use max_experience for phrases with "or more", "or higher", "above", "over"
 
 CRITICAL RULES FOR DATE FILTERING:
 - "joined after YYYY" (year only) → use "join_date_after": "YYYY-12-31" (NOT "YYYY-01-01")
@@ -110,6 +275,38 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
                 {
                     "role": "assistant",
                     "content": '{"skills": ["React"], "min_experience": 5}'
+                },
+                {
+                    "role": "user",
+                    "content": "Python devs with 5 years of experience or lower"
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"skills": ["Python"], "max_experience": 5}'
+                },
+                {
+                    "role": "user",
+                    "content": "Engineers with less than 3 years experience"
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"max_experience": 2}'
+                },
+                {
+                    "role": "user",
+                    "content": "People with above 10 years experience"
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"min_experience": 11}'
+                },
+                {
+                    "role": "user",
+                    "content": "Developers between 3 and 7 years experience"
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"min_experience": 3, "max_experience": 7}'
                 },
                 {
                     "role": "user",
@@ -155,7 +352,7 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
             ],
             model=config.LLM_MODEL,
             temperature=0,
-            max_tokens=150
+            max_tokens=200
         )
             content = response.choices[0].message.content.strip()
             if content.startswith("```"):
@@ -192,6 +389,15 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
                         print(f"Error validating {date_key}: {filters.get(date_key)}")
                         if date_key in filters:
                             del filters[date_key]
+            
+            # Validate experience values
+            for exp_key in ["exact_experience", "min_experience", "max_experience"]:
+                if exp_key in filters:
+                    try:
+                        filters[exp_key] = int(filters[exp_key])
+                    except (ValueError, TypeError):
+                        print(f"Invalid experience value for {exp_key}: {filters[exp_key]}")
+                        del filters[exp_key]
 
             return filters
         except Exception as e:
@@ -202,7 +408,7 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
                 # If all retries fail, return empty filters instead of breaking
                 return {}
 
-def search_employees(query_embedding, filters, limit=500):
+def search_employees(query_embedding, filters, limit=1000):
     supabase = get_supabase()
     query_builder = supabase.table("employees").select("*, employee_embeddings(embedding)")
 
@@ -222,9 +428,16 @@ def search_employees(query_embedding, filters, limit=500):
         print(f"Filtering by department: {filters['department']}")
         query_builder = query_builder.eq("department", filters["department"])
 
-    if "min_experience" in filters:
-        print(f"Filtering min_experience >= {filters['min_experience']}")
-        query_builder = query_builder.gte("experience_years", filters["min_experience"])
+    if "exact_experience" in filters:
+        print(f"Filtering exact_experience = {filters['exact_experience']}")
+        query_builder = query_builder.eq("experience_years", filters["exact_experience"])
+    else:
+        if "min_experience" in filters:
+            print(f"Filtering min_experience >= {filters['min_experience']}")
+            query_builder = query_builder.gte("experience_years", filters["min_experience"])
+        if "max_experience" in filters:
+            print(f"Filtering max_experience <= {filters['max_experience']}")
+            query_builder = query_builder.lte("experience_years", filters["max_experience"])
 
     employees_with_embeddings = query_builder.execute().data
     print(f"Database returned {len(employees_with_embeddings)} employees after filters")
