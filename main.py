@@ -202,7 +202,7 @@ Today is """ + datetime.now().strftime("%Y-%m-%d") + """ for date calculations."
                 # If all retries fail, return empty filters instead of breaking
                 return {}
 
-def search_employees(query_embedding, filters, limit=50):
+def search_employees(query_embedding, filters, limit=500):
     supabase = get_supabase()
     query_builder = supabase.table("employees").select("*, employee_embeddings(embedding)")
 
