@@ -52,83 +52,6 @@ def create_simple_embedding(text, dimension=None):
 class SearchRequest(BaseModel):
     query: str
 
-SEARCH_FUNCTION_SCHEMA = {
-    "name": "search_employees",
-    "description": """Search for employees based on skills, experience, department, and join date filters.
-
-CRITICAL RULES:
-1. When query says "X years experience" or "with X years" WITHOUT comparison words (like 'at least', '+', 'or more') → use operator '=' (exactly X years)
-2. Only use '>=' or '<=' when query EXPLICITLY contains: 'at least', '+', 'or more', 'or less', 'minimum', 'maximum'
-3. Each filter is independent - parse them separately
-
-Examples:
-- "5 years experience" → experience: {operator: "=", value: 5}
-- "5+ years" → experience: {operator: ">=", value: 5}
-- "devs with 5 years who joined before 2024" → experience: {operator: "=", value: 5}, join_date: {operator: "<", date: "2024"}
-- "Python devs with at least 3 years" → skills: ["Python"], experience: {operator: ">=", value: 3}
-""",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "skills": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Programming languages, frameworks, or technologies (e.g., Python, React, AWS). Exclude role words like 'developer', 'engineer', 'devs'."
-            },
-            "department": {
-                "type": "string",
-                "enum": ["Engineering", "Data", "Design", "Product", "Marketing", "Sales", "HR", "Finance", "Security", "QA", "Operations", "Legal", "Business Development", "Customer Success"],
-                "description": "Department name"
-            },
-            "experience": {
-                "type": "object",
-                "description": "Years of experience filter",
-                "properties": {
-                    "operator": {
-                        "type": "string",
-                        "enum": ["=", ">=", "<=", ">", "<", "between"],
-                        "description": "IMPORTANT: Default to '=' unless query has explicit comparison words. '=' for 'X years'/'with X years'. '>=' for 'X+'/'at least X'/'or more'. '<=' for 'or less'/'at most'. '>' for 'above'/'more than'. '<' for 'below'/'less than'."
-                    },
-                    "value": {
-                        "type": "integer",
-                        "description": "Experience value in years"
-                    },
-                    "value2": {
-                        "type": "integer",
-                        "description": "Only for 'between' operator - the upper bound"
-                    }
-                },
-                "required": ["operator", "value"]
-            },
-            "join_date": {
-                "type": "object",
-                "description": "Join date filter",
-                "properties": {
-                    "operator": {
-                        "type": "string",
-                        "enum": ["=", ">", "<", "between"],
-                        "description": "Comparison operator: = (on specific date), > (after), < (before), between (date range)"
-                    },
-                    "date": {
-                        "type": "string",
-                        "description": "Date in YYYY-MM-DD format or YYYY for year"
-                    },
-                    "date2": {
-                        "type": "string",
-                        "description": "Second date for 'between' operator in YYYY-MM-DD format"
-                    }
-                },
-                "required": ["operator", "date"]
-            },
-            "sort_by": {
-                "type": "string",
-                "enum": ["experience_desc", "experience_asc", "join_date_desc"],
-                "description": "Sort order: experience_desc (most experienced), experience_asc (least experienced), join_date_desc (most recent)"
-            }
-        }
-    }
-}
-
 SKILL_BLACKLIST = {
     "developers", "developer", "engineers", "engineer", "backend", "frontend",
     "full-stack", "fullstack", "senior", "junior", "staff", "people", "expert",
@@ -141,83 +64,101 @@ def normalize_date(date_str):
         return f"{date_str}-01-01"
     return date_str
 
-def convert_function_call_to_filters(func_args):
-    filters = {}
-    
-    if "skills" in func_args and func_args["skills"]:
-        skills = [s for s in func_args["skills"] if s.lower() not in SKILL_BLACKLIST]
-        if skills:
-            filters["skills"] = skills
-    
-    if "department" in func_args:
-        filters["department"] = func_args["department"]
-    
-    if "experience" in func_args:
-        exp = func_args["experience"]
-        operator = exp["operator"]
-        value = exp["value"]
-        
-        if operator == "=":
-            filters["exact_experience"] = value
-        elif operator == ">=":
-            filters["min_experience"] = value
-        elif operator == "<=":
-            filters["max_experience"] = value
-        elif operator == ">":
-            filters["min_experience"] = value + 1
-        elif operator == "<":
-            filters["max_experience"] = value - 1
-        elif operator == "between" and "value2" in exp:
-            filters["min_experience"] = value
-            filters["max_experience"] = exp["value2"]
-    
-    if "join_date" in func_args:
-        jd = func_args["join_date"]
-        operator = jd["operator"]
-        date = normalize_date(jd["date"])
-        
-        if operator == "=":
-            filters["join_date"] = date
-        elif operator == ">":
-            if len(jd["date"]) == 4:
-                filters["join_date_after"] = f"{jd['date']}-12-31"
-            else:
-                filters["join_date_after"] = date
-        elif operator == "<":
-            if len(jd["date"]) == 4:
-                filters["join_date_before"] = f"{jd['date']}-01-01"
-            else:
-                filters["join_date_before"] = date
-        elif operator == "between" and "date2" in jd:
-            filters["join_date_after"] = date
-            filters["join_date_before"] = normalize_date(jd["date2"])
-    
-    if "sort_by" in func_args:
-        filters["sort_by"] = func_args["sort_by"]
-    
-    return filters
-
 def extract_filters(query, max_retries=3):
+    system_prompt = """You are a precise filter extraction assistant. Extract employee search filters and return ONLY valid JSON.
+
+Output format:
+{
+    "skills": ["skill1", "skill2"],  // optional, only tech names (not 'developer', 'engineer')
+    "department": "Department Name",  // optional
+    "experience_operator": "=",  // optional: "=" (exactly), ">=" (at least/+/or more), "<=" (or less/at most), ">" (above/more than), "<" (below/less than)
+    "experience_value": 5,  // optional: years as integer
+    "join_date_operator": "=",  // optional: "=" (on date), ">" (after), "<" (before)
+    "join_date": "2024-01-01",  // optional: YYYY-MM-DD or YYYY
+    "sort_by": "experience_desc"  // optional: experience_desc, experience_asc, join_date_desc
+}
+
+CRITICAL RULES:
+1. "X years experience" or "with X years" → experience_operator: "=", experience_value: X
+2. "X+ years" or "at least X" or "X or more" → experience_operator: ">=", experience_value: X
+3. "X or less" or "at most X" → experience_operator: "<=", experience_value: X
+4. "above X" or "more than X" → experience_operator: ">", experience_value: X
+5. "below X" or "less than X" → experience_operator: "<", experience_value: X
+6. "joined after YYYY" → join_date_operator: ">", join_date: "YYYY"
+7. "joined before YYYY" → join_date_operator: "<", join_date: "YYYY"
+8. DEFAULT to "=" unless query has explicit comparison words
+
+Examples:
+Query: "Python developers" → {"skills": ["Python"]}
+Query: "5 years experience" → {"experience_operator": "=", "experience_value": 5}
+Query: "5+ years" → {"experience_operator": ">=", "experience_value": 5}
+Query: "devs with 5 years who joined before 2024" → {"experience_operator": "=", "experience_value": 5, "join_date_operator": "<", "join_date": "2024"}
+Query: "Python devs with at least 3 years" → {"skills": ["Python"], "experience_operator": ">=", "experience_value": 3}"""
+
     for attempt in range(max_retries):
         try:
             response = get_groq_client().chat.completions.create(
                 model=config.LLM_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant that extracts search filters from natural language queries."},
-                    {"role": "user", "content": query}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Extract filters from: {query}"}
                 ],
-                tools=[{"type": "function", "function": SEARCH_FUNCTION_SCHEMA}],
-                tool_choice={"type": "function", "function": {"name": "search_employees"}},
+                response_format={"type": "json_object"},
                 temperature=0
             )
             
-            if response.choices[0].message.tool_calls:
-                func_args = json.loads(response.choices[0].message.tool_calls[0].function.arguments)
-                filters = convert_function_call_to_filters(func_args)
-                print(f"Extracted filters: {filters}")
-                return filters
+            content = response.choices[0].message.content.strip()
+            raw_filters = json.loads(content)
+            print(f"Raw AI output: {raw_filters}")
             
-            return {}
+            filters = {}
+            
+            if "skills" in raw_filters and raw_filters["skills"]:
+                skills = [s for s in raw_filters["skills"] if s.lower() not in SKILL_BLACKLIST]
+                if skills:
+                    filters["skills"] = skills
+            
+            if "department" in raw_filters:
+                filters["department"] = raw_filters["department"]
+            
+            if "experience_operator" in raw_filters and "experience_value" in raw_filters:
+                op = raw_filters["experience_operator"]
+                val = int(raw_filters["experience_value"])
+                
+                if op == "=":
+                    filters["exact_experience"] = val
+                elif op == ">=":
+                    filters["min_experience"] = val
+                elif op == "<=":
+                    filters["max_experience"] = val
+                elif op == ">":
+                    filters["min_experience"] = val + 1
+                elif op == "<":
+                    filters["max_experience"] = val - 1
+            
+            if "join_date_operator" in raw_filters and "join_date" in raw_filters:
+                op = raw_filters["join_date_operator"]
+                date = raw_filters["join_date"]
+                date = normalize_date(date)
+                
+                if op == "=":
+                    filters["join_date"] = date
+                elif op == ">":
+                    if len(raw_filters["join_date"]) == 4:
+                        filters["join_date_after"] = f"{raw_filters['join_date']}-12-31"
+                    else:
+                        filters["join_date_after"] = date
+                elif op == "<":
+                    if len(raw_filters["join_date"]) == 4:
+                        filters["join_date_before"] = f"{raw_filters['join_date']}-01-01"
+                    else:
+                        filters["join_date_before"] = date
+            
+            if "sort_by" in raw_filters:
+                filters["sort_by"] = raw_filters["sort_by"]
+            
+            print(f"Converted filters: {filters}")
+            return filters
             
         except Exception as e:
             print(f"Filter extraction error (attempt {attempt + 1}/{max_retries}): {e}")
