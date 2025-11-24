@@ -54,14 +54,26 @@ class SearchRequest(BaseModel):
 
 SEARCH_FUNCTION_SCHEMA = {
     "name": "search_employees",
-    "description": "Search for employees based on skills, experience, department, and join date filters",
+    "description": """Search for employees based on skills, experience, department, and join date filters.
+
+CRITICAL RULES:
+1. When query says "X years experience" or "with X years" WITHOUT comparison words (like 'at least', '+', 'or more') → use operator '=' (exactly X years)
+2. Only use '>=' or '<=' when query EXPLICITLY contains: 'at least', '+', 'or more', 'or less', 'minimum', 'maximum'
+3. Each filter is independent - parse them separately
+
+Examples:
+- "5 years experience" → experience: {operator: "=", value: 5}
+- "5+ years" → experience: {operator: ">=", value: 5}
+- "devs with 5 years who joined before 2024" → experience: {operator: "=", value: 5}, join_date: {operator: "<", date: "2024"}
+- "Python devs with at least 3 years" → skills: ["Python"], experience: {operator: ">=", value: 3}
+""",
     "parameters": {
         "type": "object",
         "properties": {
             "skills": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Programming languages, frameworks, or technologies (e.g., Python, React, AWS). Exclude words like 'developer', 'engineer'."
+                "description": "Programming languages, frameworks, or technologies (e.g., Python, React, AWS). Exclude role words like 'developer', 'engineer', 'devs'."
             },
             "department": {
                 "type": "string",
@@ -70,20 +82,20 @@ SEARCH_FUNCTION_SCHEMA = {
             },
             "experience": {
                 "type": "object",
-                "description": "Years of experience filter. DEFAULT to '=' (exactly) unless query explicitly says 'at least', 'or more', '+', 'above', 'below', 'less than', etc.",
+                "description": "Years of experience filter",
                 "properties": {
                     "operator": {
                         "type": "string",
                         "enum": ["=", ">=", "<=", ">", "<", "between"],
-                        "description": "Operator selection guide: Use '=' for 'X years', 'with X years', 'exactly X years' (DEFAULT). Use '>=' for 'X+', 'at least X', 'X or more', 'minimum X'. Use '<=' for 'at most X', 'X or less', 'up to X', 'maximum X'. Use '>' for 'more than X', 'above X', 'over X'. Use '<' for 'less than X', 'below X', 'under X'. Use 'between' for 'between X and Y', 'X to Y years'."
+                        "description": "IMPORTANT: Default to '=' unless query has explicit comparison words. '=' for 'X years'/'with X years'. '>=' for 'X+'/'at least X'/'or more'. '<=' for 'or less'/'at most'. '>' for 'above'/'more than'. '<' for 'below'/'less than'."
                     },
                     "value": {
                         "type": "integer",
-                        "description": "Experience in years (first value or exact value)"
+                        "description": "Experience value in years"
                     },
                     "value2": {
                         "type": "integer",
-                        "description": "Second value only for 'between' operator"
+                        "description": "Only for 'between' operator - the upper bound"
                     }
                 },
                 "required": ["operator", "value"]
