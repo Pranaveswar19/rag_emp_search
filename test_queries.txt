@@ -1,0 +1,35 @@
+EXPERIENCE FILTER TEST QUERIES
+================================
+
+Exact Experience:
+- "Python developers with 5 years experience" → exact_experience: 5 (51 results)
+- "Engineers with exactly 3 years" → exact_experience: 3
+- "People who have 7 years experience" → exact_experience: 7
+
+Maximum Experience (or less):
+- "Python devs with 5 years of experience or lower" → max_experience: 5 (199 Python devs expected)
+- "Developers with 3 years or less" → max_experience: 3
+- "Under 5 years experience" → max_experience: 4
+- "Less than 3 years" → max_experience: 2
+
+Minimum Experience (or more):
+- "Developers with 5+ years" → min_experience: 5 (402 results)
+- "At least 10 years experience" → min_experience: 10
+- "Above 5 years experience" → min_experience: 6
+- "Over 10 years" → min_experience: 11
+
+Range Queries:
+- "Between 3 and 7 years experience" → min: 3, max: 7
+- "Developers with 5 to 10 years" → min: 5, max: 10
+
+Combined Filters:
+- "Python devs with 5 years or lower in Engineering" → skills + max_experience + department
+- "React developers with at least 7 years" → skills + min_experience
+- "Data department with under 3 years experience" → department + max_experience
+
+Expected Results (550 total employees):
+- Exactly 5 years: 51
+- 5 or less years: 199
+- Below 5 years (under 5): 148
+- 5+ years: 402
+- Above 5 years (6+): 351
