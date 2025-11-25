@@ -25,9 +25,11 @@
         .search-box { display: flex; gap: 10px; margin-bottom: 20px; }
         .search-input {
             flex: 1; padding: 15px 20px; font-size: 1rem;
-            border: 2px solid rgba(255, 255, 255, 0.2); border-radius: 12px;
-            background: rgba(255, 255, 255, 0.9); color: #000;
+            border: 1px solid #334155; border-radius: 12px;
+            background: #1e293b; color: #fff;
         }
+        .search-input::placeholder { color: #94a3b8; }
+        .search-input:focus { outline: none; border-color: #2DAFB9; }
         .search-btn {
             padding: 15px 35px; font-size: 1rem; font-weight: 600;
             background: linear-gradient(135deg, #2DAFB9 0%, #0099FF 100%);
@@ -53,20 +55,20 @@
             gap: 20px; margin-top: 20px;
         }
         .employee-card {
-            background: rgba(255, 255, 255, 0.9); border: 2px solid rgba(255, 255, 255, 0.2); border-radius: 12px;
+            background: #1e293b; border: 1px solid #334155; border-radius: 12px;
             padding: 20px; transition: all 0.3s;
         }
-        .employee-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(45, 175, 185, 0.3); border-color: rgba(45, 175, 185, 0.5); }
-        .employee-name { font-size: 1.25rem; font-weight: 700; color: #000; margin-bottom: 5px; }
-        .employee-email { color: #4a5568; font-size: 0.875rem; margin-bottom: 10px; }
-        .employee-meta { color: #2d3748; font-size: 0.875rem; margin: 10px 0; }
+        .employee-card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(45, 175, 185, 0.3); border-color: #2DAFB9; }
+        .employee-name { font-size: 1.25rem; font-weight: 700; color: #fff; margin-bottom: 5px; }
+        .employee-email { color: #94a3b8; font-size: 0.875rem; margin-bottom: 10px; }
+        .employee-meta { color: #cbd5e1; font-size: 0.875rem; margin: 10px 0; }
         .skills { margin: 10px 0; }
         .skill-tag {
             background: linear-gradient(135deg, #2DAFB9 0%, #0099FF 100%);
             color: white; padding: 4px 12px; border-radius: 12px;
             font-size: 0.75rem; margin: 3px; display: inline-block;
         }
-        .employee-bio { color: #4a5568; font-size: 0.875rem; margin-top: 10px; line-height: 1.5; }
+        .employee-bio { color: #94a3b8; font-size: 0.875rem; margin-top: 10px; line-height: 1.5; }
         h2 { color: #fff; }
     </style>
 </head>
